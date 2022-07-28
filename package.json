@@ -16,5 +16,8 @@
   "bugs": {
     "url": "https://github.com/pow/zenn/issues"
   },
-  "homepage": "https://github.com/pow/zenn#readme"
+  "homepage": "https://github.com/pow/zenn#readme",
+  "dependencies": {
+    "zenn-cli": "^0.1.115"
+  }
 }
