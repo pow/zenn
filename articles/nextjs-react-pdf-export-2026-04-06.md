@@ -91,6 +91,67 @@ export async function GET(request: Request) {
 
 実際のアプリケーションでは、URL パラメータや DB から取得したデータを props に渡すことで、リクエストごとに異なる PDF を生成できます。
 
+## なぜ PDF 生成はメインスレッドをロックするのか
+
+ここまでのコードは動作しますが、**本番環境ではそのまま使うと危険**です。
+
+Node.js はシングルスレッドのイベントループで動作します。`@react-pdf/renderer` は内部で Yoga レイアウトエンジンを使い、各要素の座標・サイズを**同期的に**計算します(*1)。`renderToBuffer` は Promise を返すため一見非同期に見えますが、レイアウト計算の本体は同期処理です。実行中はイベントループが完全に停止します。
+
+つまり、あるユーザーの PDF 生成中は、**同じ Node.js プロセス上の他のすべてのリクエストが待ち状態になります**。ページ数が多い PDF やフォント埋め込みが重なると、数百ミリ秒〜数秒のブロックが発生し、他ユーザーへの応答遅延に直結します。
+
+以下のコードで、`Promise.all` で2つの PDF を「並行」生成しても合計時間がほぼ変わらないことを確認できます。
+
+```typescript
+// 逐次実行
+const start1 = performance.now();
+await renderToBuffer(<InvoiceDocument {...props} />);
+await renderToBuffer(<InvoiceDocument {...props} />);
+console.log(`逐次: ${performance.now() - start1}ms`);
+
+// Promise.all — 並行に見えるが実際はブロックが連続する
+const start2 = performance.now();
+await Promise.all([
+  renderToBuffer(<InvoiceDocument {...props} />),
+  renderToBuffer(<InvoiceDocument {...props} />),
+]);
+console.log(`Promise.all: ${performance.now() - start2}ms`);
+// → 両者の所要時間はほぼ同じ
+```
+
+### Worker Thread で別スレッドに逃がす
+
+Node.js の `worker_threads` を使えば、PDF 生成を別スレッドで実行でき、メインスレッドのイベントループをブロックしません(*3)。
+
+```typescript
+// pdf.worker.ts — 別スレッドで PDF を生成
+import { parentPort, workerData } from "node:worker_threads";
+import { renderToBuffer } from "@react-pdf/renderer";
+import { InvoiceDocument } from "./invoice-document";
+
+const buffer = await renderToBuffer(
+  <InvoiceDocument {...workerData} />
+);
+parentPort?.postMessage(buffer, [buffer.buffer]);
+```
+
+```typescript
+// route.ts — メインスレッドからワーカーを起動
+import { Worker } from "node:worker_threads";
+
+function renderPdfInWorker(props: InvoiceProps): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(
+      new URL("./pdf.worker.ts", import.meta.url),
+      { workerData: props }
+    );
+    worker.on("message", (buf) => resolve(Buffer.from(buf)));
+    worker.on("error", reject);
+  });
+}
+```
+
+Worker Thread を使えば PDF 生成中もメインスレッドは他のリクエストを処理でき、ユーザー体験の劣化を防げます。複数の同時リクエストが予想される場合は積極的に検討してください。
+
 ## スタイリングの実践 Tips
 
 `@react-pdf/renderer` のスタイルは CSS のサブセットですが、いくつか注意点があります。
@@ -105,9 +166,10 @@ export async function GET(request: Request) {
 
 - `@react-pdf/renderer` を使えば、React コンポーネントとして PDF レイアウトを宣言的に定義できる
 - Next.js Route Handler と `renderToBuffer` を組み合わせることで、サーバーサイドで PDF を動的生成し、レスポンスとして返せる
-- スタイルは Flexbox ベースの CSS サブセットで記述し、日本語フォントは `Font.register` で対応する
+- `renderToBuffer` は内部で同期的なレイアウト計算を行うため、メインスレッドをブロックする。本番では Worker Thread への分離を検討する
 
 ## 参考リンク
 
 - *1: [React-pdf 公式ドキュメント](https://react-pdf.org/)
 - *2: [Next.js Route Handlers ドキュメント](https://nextjs.org/docs/app/getting-started/route-handlers)
+- *3: [Node.js worker_threads ドキュメント](https://nodejs.org/api/worker_threads.html)
