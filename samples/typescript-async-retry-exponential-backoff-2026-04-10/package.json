@@ -1,0 +1,12 @@
+{
+  "name": "typescript-async-retry-exponential-backoff",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --import tsx --test tests/retry.test.ts"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2"
+  }
+}
