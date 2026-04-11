@@ -1,0 +1,36 @@
+# Drop-in Deployment snippet. Combine with your existing chart — the
+# three fields that matter are terminationGracePeriodSeconds, the preStop
+# lifecycle hook, and the readinessProbe path.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-go-service
+spec:
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    spec:
+      # Total budget from SIGTERM to SIGKILL. Must be >= preStop sleep +
+      # the maximum time http.Server.Shutdown needs to drain in-flight work.
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: app
+          image: my-go-service:latest
+          ports:
+            - containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8080
+            periodSeconds: 2
+            failureThreshold: 1
+          lifecycle:
+            preStop:
+              exec:
+                # Pure sleep: give kube-proxy time to remove this Pod from
+                # every node's iptables rules before the app starts draining.
+                # 30s is a common starting value; tune with your own rollout.
+                command: ["/bin/sh", "-c", "sleep 30"]
