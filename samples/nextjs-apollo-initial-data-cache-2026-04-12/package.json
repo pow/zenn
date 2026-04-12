@@ -1,0 +1,12 @@
+{
+  "name": "nextjs-apollo-initial-data-cache",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --import tsx --test tests/resolve-data.test.ts"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2"
+  }
+}
